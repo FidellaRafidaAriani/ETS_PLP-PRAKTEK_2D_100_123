@@ -42,7 +42,15 @@ class Resolver:
         self.diagnostics: list[Diagnostic] = []
 
     def resolve_script(self, script: ast.Script) -> list[Diagnostic]:
+        """Resolve each statement with an independent top-level scope chain."""
+        self.scope = None
+        self.diagnostics = []
         for stmt in script.statements:
+            # Every statement must return to the top-level (None) scope on its
+            # own. Do not forcibly reset here: that would hide a missing _pop.
+            for node in ast.iter_nodes(stmt):
+                if isinstance(node, ast.ColumnRef):
+                    node.resolved = None
             self.resolve_statement(stmt)
         return self.diagnostics
 
@@ -85,15 +93,12 @@ class Resolver:
             self._declare(source.alias, None, source.line)
 
     def _lookup(self, name: str) -> ScopeEntry | None:
-        """Cari nama di rantai scope."""
-        chain = []
+        """Cari alias dari scope terdalam ke scope induk (nearest binding)."""
         scope = self.scope
         while scope is not None:
-            chain.append(scope)
-            scope = scope.parent
-        for scope in reversed(chain):
             if name in scope.entries:
                 return scope.entries[name]
+            scope = scope.parent
         return None
 
     # ---- statement ------------------------------------------------------
@@ -105,19 +110,21 @@ class Resolver:
             if isinstance(src, ast.DerivedTable):
                 self._select(src.query)
         self._push()
-        for src in sources:
-            self._declare_source(src)
-        for item in sel.columns:
-            if isinstance(item, ast.SelectItem):
+        try:
+            for src in sources:
+                self._declare_source(src)
+            for item in sel.columns:
+                if isinstance(item, ast.SelectItem):
+                    self._expr(item.expr)
+            for join in sel.joins:
+                self._expr(join.condition)
+            self._expr(sel.where)
+            for expr in sel.group_by:
+                self._expr(expr)
+            for item in sel.order_by:
                 self._expr(item.expr)
-        for join in sel.joins:
-            self._expr(join.condition)
-        self._expr(sel.where)
-        for expr in sel.group_by:
-            self._expr(expr)
-        for item in sel.order_by:
-            self._expr(item.expr)
-        self._pop()
+        finally:
+            self._pop()
 
     def _insert(self, ins: ast.Insert) -> None:
         for row in ins.values:
@@ -128,17 +135,22 @@ class Resolver:
 
     def _update(self, upd: ast.Update) -> None:
         self._push()
-        self._declare_source(upd.table)
-        for assignment in upd.assignments:
-            self._column(assignment.column)
-            self._expr(assignment.value)
-        self._expr(upd.where)
-        self._pop()
+        try:
+            self._declare_source(upd.table)
+            for assignment in upd.assignments:
+                self._column(assignment.column)
+                self._expr(assignment.value)
+            self._expr(upd.where)
+        finally:
+            self._pop()
 
     def _delete(self, dele: ast.Delete) -> None:
         self._push()
-        self._declare_source(dele.table)
-        self._expr(dele.where)
+        try:
+            self._declare_source(dele.table)
+            self._expr(dele.where)
+        finally:
+            self._pop()
 
     # ---- ekspresi -------------------------------------------------------
     def _expr(self, expr) -> None:
@@ -170,6 +182,8 @@ class Resolver:
                 self._expr(arg)
 
     def _column(self, col: ast.ColumnRef) -> None:
+        # Hasil boleh dihitung ulang ketika AST yang sama di-resolve kembali.
+        col.resolved = None
         if col.qualifier is not None:
             entry = self._lookup(col.qualifier)
             if entry is None:
@@ -177,8 +191,16 @@ class Resolver:
             else:
                 col.resolved = _target_of(entry)
             return
-        # TODO(T2): kolom tanpa qualifier (SPESIFIKASI.md bagian 4.3).
-        #   - tepat satu tabel di scope terdalam -> isi col.resolved
-        #   - lebih dari satu tabel              -> warning "ambigu tanpa skema"
-        #   - tidak ada tabel                    -> warning
-        pass
+
+        # Nama tanpa qualifier hanya boleh memakai deklarasi di scope
+        # terdalam. Tidak ada pencarian ke parent untuk kasus ini.
+        entries = self.scope.entries if self.scope is not None else {}
+        if not entries:
+            self._warning(
+                f"kolom '{col.name}' tidak dapat di-resolve karena tidak ada tabel dalam scope",
+                col.line,
+            )
+        elif len(entries) == 1:
+            col.resolved = _target_of(next(iter(entries.values())))
+        else:
+            self._warning(f"kolom '{col.name}' ambigu tanpa skema", col.line)
