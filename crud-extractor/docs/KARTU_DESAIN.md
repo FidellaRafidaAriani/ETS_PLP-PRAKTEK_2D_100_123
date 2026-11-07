@@ -1,19 +1,9 @@
-# Kartu Desain
-
-Tuliskan lima keputusan desain penting dalam pekerjaan kalian. Untuk tiap keputusan, sebutkan
-alternatif yang ditolak dan alasannya. Contoh topik (boleh memilih yang lain):
-
-- bagaimana parser membedakan `*` sebagai "semua kolom" dan sebagai perkalian;
-- di mana dan bagaimana presedensi `AND`/`OR` dinyatakan;
-- mengapa error recovery berhenti di `;`, bukan di keyword `SELECT` berikutnya;
-- urutan pencarian scope dan akibatnya pada shadowing serta correlated subquery;
-- mengapa kolom tanpa qualifier hanya dilihat di scope terdalam, dan apa kelemahannya;
-- bagaimana implementasi `INSERT ... SELECT` atau komentar blok kalian.
+# Kartu Desain — Anggota 2 (Resolver dan CRUD Analyzer)
 
 | No | Keputusan | Alternatif yang ditolak | Alasan |
 | --- | --- | --- | --- |
-| 1 | | | |
-| 2 | | | |
-| 3 | | | |
-| 4 | | | |
-| 5 | | | |
+| 1 | Pencarian qualifier berjalan dari scope terdalam ke scope induk. | Mendahulukan scope luar atau mengumpulkan seluruh alias lalu memilih yang pertama dari luar. | Binding lokal harus menutupi alias bernama sama di outer scope (shadowing), sementara pencarian tetap dapat mencapai alias luar untuk correlated subquery. |
+| 2 | Kolom tanpa qualifier hanya diperiksa pada scope terdalam. | Mencari ke scope parent ketika kolom tidak ditemukan di scope aktif. | Ini adalah aturan eksplisit spesifikasi; pencarian ke parent dapat memilih tabel luar yang tidak dimaksud dan menyembunyikan ambiguitas lokal. |
+| 3 | Kolom tanpa qualifier di-resolve hanya jika scope terdalam punya tepat satu sumber; selain itu dibiarkan `None` dan diberi warning. | Memilih tabel pertama saat ada beberapa sumber, atau selalu memilih tabel target terdekat. | Tanpa skema database, analyzer tidak punya bukti untuk menentukan kepemilikan kolom yang ambigu. Memilih salah satu akan menghasilkan penggunaan kolom yang menyesatkan. |
+| 4 | Subquery dalam ekspresi `UPDATE` dihitung sebagai pembacaan (`R`), sedangkan tabel target tetap `U`. | Mewariskan operasi `U` ke seluruh node di bawah assignment dan `WHERE`. | Operasi terhadap target statement berbeda dari operasi yang dilakukan tabel sumber di subquery; aturan lokal proyek menyebut subquery selalu `R`. |
+| 5 | Scope statement selalu ditutup setelah resolusi, termasuk jalur `DELETE`. | Membiarkan scope aktif dan membersihkannya hanya ketika statement berikutnya dimulai. | Umur scope harus mengikuti statement pembentuknya. Cleanup eksplisit dengan `try/finally` menjaga perilaku konsisten dan mencegah alias bocor saat pemrosesan bertingkat. |

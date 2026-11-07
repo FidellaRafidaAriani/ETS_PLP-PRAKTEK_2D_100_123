@@ -11,18 +11,28 @@ from pathlib import Path
 
 from .ast_nodes import pretty
 from .parser import parse_sql
+from .lexer import LexError
 from .pipeline import analyze_source
 from .resolver import Resolver
 
 
-def _print_ast(path: Path) -> None:
-    script = parse_sql(path.read_text(encoding="utf-8"))
-    Resolver().resolve_script(script)
+def _print_ast(path: Path) -> bool:
+    """Cetak AST dan diagnostik; kembalikan True bila ada error."""
+    try:
+        script = parse_sql(path.read_text(encoding="utf-8"))
+    except LexError as err:
+        print(f"LEX ERROR: {err}", file=sys.stderr)
+        return True
+
+    diagnostics = Resolver().resolve_script(script)
     for stmt in script.statements:
         print(f"--- baris {stmt.line} ---")
         print(pretty(stmt))
     for err in script.errors:
-        print(f"PARSE ERROR: {err}")
+        print(f"PARSE ERROR: {err}", file=sys.stderr)
+    for diag in diagnostics:
+        print(f"RESOLVER: {diag}", file=sys.stderr)
+    return bool(script.errors or any(d.level == "error" for d in diagnostics))
 
 
 def main(argv=None) -> int:
@@ -35,10 +45,11 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     if args.ast:
+        had_error = False
         for path in args.files:
             print(f"===== {path} =====")
-            _print_ast(path)
-        return 0
+            had_error = _print_ast(path) or had_error
+        return 1 if had_error else 0
 
     had_error = False
     results = {}
@@ -53,6 +64,8 @@ def main(argv=None) -> int:
             print(f"{path.name}: PARSE ERROR: {err}", file=sys.stderr)
         for diag in res.diagnostics:
             print(f"{path.name}: {diag}", file=sys.stderr)
+            if diag.level == "error":
+                had_error = True
 
     tables = sorted({t for r in results.values() for t in r.matrix()})
     with args.out.open("w", newline="", encoding="utf-8") as fh:
