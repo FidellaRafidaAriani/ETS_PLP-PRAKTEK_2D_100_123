@@ -394,7 +394,7 @@ SELECT nama FROM pelanggan;
 SELECT id FROM pelanggan p JOIN pesanan o ON p.id = o.id;
 ```
 
-**Akar masalah.** Cabang `_column()` untuk `ColumnRef.qualifier is None` berhenti pada `pass`. Resolver belum menerapkan aturan keputusan berdasarkan isi scope. Resolusi nama tanpa qualifier juga tidak boleh melakukan pencarian ke scope parent: spesifikasi secara eksplisit membatasi pencarian pada scope terdalam.
+**Akar masalah.** Cabang `_column()` untuk `ColumnRef.qualifier is None` berhenti pada `pass`, sehingga resolver belum menerapkan aturan berdasarkan isi scope. Pada *Crafting Interpreters* Bab 11, bagian **Static Scope** dan **Resolving Variable Expressions**, dijelaskan bahwa pencarian nama dimulai dari scope terdalam, lalu bergerak ke scope luar jika belum ditemukan. Namun, untuk kolom SQL tanpa qualifier, pencarian hanya dilakukan pada scope terdalam sesuai aturan dalam SPESIFIKASI.md.
 
 **Perbaikan.** `crud/resolver.py`, fungsi `_column()`: bila scope terdalam memiliki tepat satu deklarasi, `resolved` diisi dengan target tabel atau `"<subquery alias>"`; bila memiliki lebih dari satu deklarasi, resolver memberi warning `kolom 'nama' ambigu tanpa skema` dan membiarkan `resolved=None`; bila tidak ada deklarasi, resolver memberi warning bahwa kolom tidak dapat di-resolve karena tidak ada tabel dalam scope.
 
@@ -418,7 +418,7 @@ SET status = (SELECT status FROM arsip)
 WHERE id IN (SELECT pesanan_id FROM pelanggan);
 ```
 
-**Akar masalah.** `analyze_statement()` meneruskan label operasi `U` ke `_collect()` untuk seluruh ekspresi assignment dan kondisi `WHERE`. Fungsi rekursif itu juga memakai label yang sama saat turun ke AST subquery, sehingga konteks operasi target menular ke tabel sumber. Analyzer perlu membedakan operasi pada tabel target dari operasi baca pada tabel di dalam SELECT.
+**Akar masalah.** `analyze_statement()` meneruskan label operasi `U` ke `_collect()` untuk ekspresi assignment dan `WHERE`. Akibatnya, saat menelusuri subquery, tabel sumber juga ikut diberi label `U`. Pada *Crafting Interpreters* Bab 11, bagian **Semantic Analysis** dan **A Variable Resolution Pass**, dijelaskan bahwa analisis semantik dilakukan dengan menelusuri syntax tree untuk memahami makna setiap bagian program. Karena itu, analyzer perlu membedakan konteks tabel target dan tabel sumber. Dalam proyek ini, tabel target diberi `U`, sedangkan tabel yang dibaca subquery diberi `R` sesuai SPESIFIKASI.md.
 
 **Perbaikan.** `crud/analyzer.py`, cabang `ast.Update` pada `analyze_statement()`: target tetap ditandai `U`, sedangkan ekspresi assignment dan `WHERE` ditelusuri dengan label `R`. `_collect()` lalu menandai subquery sumber sebagai pembacaan.
 
@@ -442,7 +442,7 @@ SELECT x.id FROM pelanggan p;
 
 Jalankan `python -m crud.cli FILE.sql --ast`.
 
-**Akar masalah.** `_print_ast()` memanggil resolver tetapi membuang list diagnostiknya. Jalur `--ast` juga tidak mengagregasi kondisi error menjadi status proses. Ini membuat antarmuka tidak menyajikan hasil lengkap dari urutan pipeline lexer, parser, resolver.
+**Akar masalah.** `_print_ast()` memanggil resolver, tetapi membuang hasil diagnostiknya. Selain itu, jalur `--ast` belum menerjemahkan kondisi error menjadi exit code. Pada *Crafting Interpreters* Bab 11, bagian **Semantic Analysis** dan **A Variable Resolution Pass**, dijelaskan bahwa resolver merupakan tahap analisis tersendiri setelah parsing dan sebelum program dijalankan. Karena itu, hasil resolver perlu diperhatikan oleh tahap berikutnya. Dalam proyek ini, CLI bertugas menampilkan diagnostik dan menentukan exit code sesuai kondisi error.
 
 **Perbaikan.** `crud/cli.py`, fungsi `_print_ast()` dan `main()`: diagnostik resolver dicetak ke stderr; error leksikal ditangani; parse error dan resolver error membuat exit code menjadi 1. Untuk mode normal, resolver diagnostic berlevel `error` juga memengaruhi exit code.
 
